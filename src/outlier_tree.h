@@ -38,6 +38,7 @@
 #include <memory>
 #include <algorithm>
 #include <numeric>
+#include <unordered_set>
 #include <math.h>
 #include <stddef.h>
 #include <limits.h>
@@ -100,7 +101,7 @@
 
 /* MSVC is stuck with an OpenMP version that's 19 years old at the time of writing and does not support unsigned iterators */
 #ifdef _OPENMP
-    #if _OPENMP < 200801 /* OpenMP < 3.0 */
+    #if (_OPENMP < 200801) || defined(_WIN32) || defined(_WIN64) /* OpenMP < 3.0 */
         #define size_t_for long
     #else
         #define size_t_for size_t
@@ -755,3 +756,4 @@ void set_tree_as_categorical(ClusterTree &tree, size_t col, int ncat);
 void set_tree_as_ordinal(ClusterTree &tree, int split_lev, size_t col);
 void forget_row_outputs(ModelOutputs &model_outputs);
 void allocate_row_outputs(ModelOutputs &model_outputs, size_t nrows, size_t max_depth);
+void check_more_two_values(double arr_num[], size_t nrows, size_t ncols, int nthreads, char too_few_values[]);
