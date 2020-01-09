@@ -5,7 +5,7 @@
 \title{Predict method for Outlier Tree}
 \usage{
 \method{predict}{outliertree}(object, newdata, outliers_print = 15,
-  return_outliers = FALSE, ...)
+  return_outliers = TRUE, ...)
 }
 \arguments{
 \item{object}{An Outlier Tree object as returned by `outlier.tree`.}
@@ -59,7 +59,7 @@ df_test = data.frame(
 )
     
 ### fit model on training data
-outliers_model = outlier.tree(df, outliers_print = FALSE)
+outliers_model = outlier.tree(df, outliers_print=FALSE, nthreads=1)
 
 ### find the test outlier
 test_outliers = predict(outliers_model, df_test,
@@ -69,5 +69,5 @@ test_outliers = predict(outliers_model, df_test,
 test_outliers[[1]]
 }
 \seealso{
-\link{outlier.tree}
+\link{outlier.tree} \link{print.outlieroutputs} \link{unpack.outlier.tree}
 }

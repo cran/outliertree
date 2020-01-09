@@ -4,23 +4,82 @@
 \alias{outlier.tree}
 \title{Outlier Tree}
 \usage{
-outlier.tree(df, cols_ord = NULL, cols_ignore = NULL,
-  save_outliers = FALSE, outliers_print = 10, max_depth = 4,
-  min_gain = 0.1, z_norm = 2.67, z_outlier = 8,
-  pct_outliers = 0.01, min_size_numeric = 25, min_size_categ = 75,
-  categ_as_bin = TRUE, ord_as_bin = TRUE,
-  cat_bruteforce_subset = FALSE, follow_all = FALSE, nthreads = -1)
+outlier.tree(df, max_depth = 4, min_gain = 0.01, z_norm = 2.67,
+  z_outlier = 8, pct_outliers = 0.01, min_size_numeric = 25,
+  min_size_categ = 50, categ_split = "binarize",
+  categ_outliers = "tail", cols_ignore = NULL, follow_all = FALSE,
+  gain_as_pct = TRUE, save_outliers = FALSE, outliers_print = 10,
+  nthreads = parallel::detectCores())
 }
 \arguments{
-\item{df}{Data Frame with normal data that might contain some outliers.}
+\item{df}{Data Frame with normal data that might contain some outliers. See details for allowed column types.}
 
-\item{cols_ord}{Character vector indicating which categorical columns are ordinal.
-Ordinal columns must be passed as factors.}
+\item{max_depth}{Maximum depth of the trees to grow. Can also pass zero, in which case it will only look
+for outliers with no conditions (i.e. takes each column as a 1-d distribution and looks for outliers in
+there independently of the values in other columns).}
+
+\item{min_gain}{Minimum gain that a split has to produce in order to consider it (both in terms of looking
+for outliers in each branch, and in considering whether to continue branching from them). Note that default
+value for GritBot is 1e-6, with `gain_as_pct` = `FALSE`. Recommended to pass higher values (e.g. 1e-1) when using
+`gain_as_pct` = `FALSE`.}
+
+\item{z_norm}{Maximum Z-value (from standard normal distribution) that can be considered as a normal
+observation. Note that simply having values above this will not automatically flag observations as outliers,
+nor does it assume that columns follow normal distributions. Also used for categorical and ordinal columns
+for building approximate confidence intervals of proportions.}
+
+\item{z_outlier}{Minimum Z-value that can be considered as an outlier. There must be a large gap in the
+Z-value of the next observation in sorted order to consider it as outlier, given by (z_outlier - z_norm).
+Decreasing this parameter is likely to result in more observations being flagged as outliers.
+Ignored for categorical and ordinal columns.}
+
+\item{pct_outliers}{Approximate max percentage of outliers to expect in a given branch.}
+
+\item{min_size_numeric}{Minimum size that branches need to have when splitting a numeric column. In order to look for
+outliers in a given branch for a numeric column, it must have a minimum of twice this number
+of observations.}
+
+\item{min_size_categ}{Minimum size that branches need to have when splitting a categorical or ordinal column. In order to
+look for outliers in a given branch for a categorical, ordinal, or boolean column, it must have a minimum of twice
+this number of observations.}
+
+\item{categ_split}{How to produce categorical-by-categorical splits. Options are:
+\itemize{
+  \item `"binarize"` : Will binarize the target variable according to whether it's equal to each present category
+  within it (greater/less for ordinal), and split each binarized variable separately.
+  \item `"bruteforce"` : Will evaluate each possible binary split of the categories (that is, it evaluates 2^n potential
+  splits every time). Note that trying this when there are many categories in a column will result
+  in exponential computation time that might never finish.
+  \item `"separate"` : Will create one branch per category of the splitting variable (this is how GritBot handles them).
+}}
+
+\item{categ_outliers}{How to look for outliers in categorical variables. Options are:
+\itemize{
+  \item `"tail"` : Will try to flag outliers if there is a large gap between proportions in sorted order, and this
+  gap is unexpected given the prior probabilities. Such criteria tends to sometimes flag too many
+  uninteresting outliers, but is able to detect more cases and recognize outliers when there is no
+  single dominant category.
+  \item `"majority"` : Will calculate an equivalent to z-value according to the number of observations that do not
+  belong to the non-majority class, according to formula '(n-n_maj)/(n * p_prior) < 1/z_outlier^2'.
+  Such criteria  tends to miss many interesting outliers and will only be able to flag outliers in
+  large sample sizes. This is the approach used by GritBot.
+}}
 
 \item{cols_ignore}{Vector containing columns which will not be split, but will be evaluated for usage
 in splitting other columns. Can pass either a logical (boolean) vector with the same number of columns
 as `df`, or a character vector of column names (must match with those of `df`).
 Pass `NULL` to use all columns.}
+
+\item{follow_all}{Whether to continue branching from each split that meets the size and gain criteria.
+This will produce exponentially many more branches, and if depth is large, might take forever to finish.
+Will also produce a lot more spurious outiers. Not recommended.}
+
+\item{gain_as_pct}{Whether the minimum gain above should be taken in absolute terms, or as a percentage of
+the standard deviation (for numerical columns) or shannon entropy (for categorical columns). Taking it in
+absolute terms will prefer making more splits on columns that have a large variance, while taking it as a
+percentage might be more restrictive on them and might create deeper trees in some columns. For GritBot
+this parameter would always be `FALSE`. Recommended to pass higher values for `min_gain` when passing `FALSE`
+here. Not that when `gain_as_pct` = `FALSE`, the results will be sensitive to the scales of variables.}
 
 \item{save_outliers}{Whether to store outliers detected in `df` in the object that is returned.
 These outliers can then be extracted from the returned object through function
@@ -31,53 +90,10 @@ the model. Pass zero or `NULL` to avoid printing any. Outliers can be printed fr
 afterwards through the `predict` method, or through the `print` method (on the extracted outliers, not on
 the model object) if passing `save_outliers` = `TRUE`.}
 
-\item{max_depth}{Maximum depth of the trees to grow. Can also pass zero, in which case it will only look
-for outliers with no conditions (i.e. takes each column as a 1-d distribution and looks for outliers in
-there independently of the values in other columns).}
-
-\item{min_gain}{Minimum gain that a split has to produce in order to consider it (both in terms of looking
-for outliers in each branch, and in considering whether to continue branching from them). Note that default
-value for GritBot is 1e-6.}
-
-\item{z_norm}{Maximum Z-value (from standard normal distribution) that can be considered as a normal
-observation. Note that simply having values above this will not automatically flag observations as outliers,
-nor does it assume that columns follow normal distributions. Also used for categorical and ordinal columns
-for building approximate confidence intervals of proportions.}
-
-\item{z_outlier}{Minimum Z-value that can be considered as an outlier. There must be a large gap in the
-Z-value of the next observation in sorted order to consider it as outlier, given by (z_outlier - z_norm).
-Ignored for categorical and ordinal columns.}
-
-\item{pct_outliers}{Approximate max percentage of outliers to expect in a given branch.}
-
-\item{min_size_numeric}{Minimum size that branches need to have when splitting a numeric column.}
-
-\item{min_size_categ}{Minimum size that branches need to have when splitting a categorical or ordinal column.}
-
-\item{categ_as_bin}{Whether to make categorical-by-categorical binary splits by binarizing each category
-in the column and then attempting splits by grouping categories into subsets. Alternative is to create
-one branch per category of the column being split from. Ignored when there is only one or fewer categorical
-columns. Can only pass one of `categ_as_bin` and `cat_bruteforce_subset`.}
-
-\item{ord_as_bin}{Same as `categ_as_bin`, but for ordinal columns, and cumulative (i.e. it splits by "<=",
-not "="). Ignored when there are no ordinal columns or no categorical columns.}
-
-\item{cat_bruteforce_subset}{Whether to make categorical-by-categorical binary splits by trying all the
-possible combinations of columns in each subset (that is, it evaluates 2^n potential splits every time).
-Note that trying this when there are many categories in a column will result in exponential computation
-time that might never finish. Alternative is to create one branch per category of the column being split
-from. Ignored when there is only one or fewer categorical columns. Can only pass one of `categ_as_bin`
-and `cat_bruteforce_subset`.}
-
-\item{follow_all}{Whether to continue branching from each split that meets the size and gain criteria.
-This will produce exponentially many more branches, and if depth is large, might take forever to finish.
-Will also produce a lot more spurious outiers. Not recommended.}
-
 \item{nthreads}{Number of parallel threads to use. When fitting the model, it will only use up to one
 thread per column, while for prediction it will use up to one thread per row. The more threads that are
 used, the more memory will be required and allocated, so using more threads will not always lead to better
-speed. Passing zero or negative numbers will default to the maximum number of available CPU cores (but not
-if the object attribute is overwritten). Can be changed after the object is already initialized.}
+speed. Can be changed after the object is already initialized.}
 }
 \value{
 An object with the fitted model that can be used to detect more outliers in new data, and from
@@ -96,11 +112,11 @@ tries to "predict" (unlike other methods, this will not generate a score for eac
 Splits are based on gain, while outlierness is based on confidence intervals. Similar in spirit to the GritBot
 software developed by RuleQuest research.
 
-Supports columns of types numeric, categorical, and ordinal (for this last one, will consider their order when
-splitting other columns from them, but not when splitting to "predict" them), and can handle missing values
-in any of them. Can also pass dates/timestamps that will get converted to numeric but shown as dates/timestamps
-in the output. Offers option to set columns to be used only to split other columns but not to look at outliers
-in them.
+Supports columns of types numeric (either as type `numeric` or `integer`), categorical (either as type `character` or
+`factor` with unordered levels), boolean (as type `logical`), and ordinal (as type `factor` with ordered levels as checked by
+`is.ordered`). Can handle missing values in any of them. Can also pass dates/timestamps that will get converted to
+numeric but shown as dates/timestamps in the output. Offers option to set columns to be used only for generating
+conditions without looking at outliers in them.
 
 Infinite values will be taken into consideration when the column is used to split another column
 (that is, +inf will go into the branch that is greater than something, -inf into the other branch),
@@ -114,7 +130,10 @@ library(outliertree)
 data(hypothyroid)
 
 ### fit the model and get a print of outliers
-model <- outlier.tree(hypothyroid, outliers_print=10, save_outliers=TRUE)
+model <- outlier.tree(hypothyroid,
+  outliers_print=10,
+  save_outliers=TRUE,
+  nthreads=1)
 
 ### extract outlier info as R list
 outliers <- extract.training.outliers(model)
@@ -130,8 +149,11 @@ outliers.w.names <- predict(model, df.w.names, return_outliers=TRUE)
 outliers.w.names[["rownum745"]]
 }
 \references{
-GritBot software: \url{https://www.rulequest.com/gritbot-info.html}
+\itemize{
+  \item GritBot software: \url{https://www.rulequest.com/gritbot-info.html}
+  \item Cortes, David. "Explainable outlier detection through decision tree conditioning." arXiv preprint arXiv:2001.00636 (2020).
+}
 }
 \seealso{
-\link{predict.outliertree} \link{extract.training.outliers} \link{hypothyroid}
+\link{predict.outliertree} \link{extract.training.outliers} \link{hypothyroid} \link{unpack.outlier.tree}
 }

@@ -100,8 +100,8 @@ bool find_new_outliers(double *restrict numeric_data,
 
         /* Note: earlier versions of OpenMP (like v2 released in 2000 and still used by MSVC in 2019) don't support max reduction, hence this code */
         #ifdef _OPENMP
-            #if _OPENMP > 200801 && !defined(_WIN32) && !defined(_WIN64)
-                #pragma omp parallel for schedule(dynamic) num_threads(nthreads) shared(model_outputs, nrows, prediction_data) firstprivate(col_is_num, col) private(num_val_this, cat_val_this) reduction(max:found_outliers)
+            #if (_OPENMP > 200801) && !defined(_WIN32) && !defined(_WIN64)
+                #pragma omp parallel for schedule(dynamic) num_threads(nthreads) shared(model_outputs, nrows, prediction_data) firstprivate(col_is_num, col) private(num_val_this, cat_val_this) reduction(+:found_outliers)
             #else
                 #pragma omp parallel for schedule(dynamic) num_threads(nthreads) shared(model_outputs, outliers_thread, nrows, prediction_data) firstprivate(col_is_num, col) private(num_val_this, cat_val_this)
             #endif
@@ -124,16 +124,16 @@ bool find_new_outliers(double *restrict numeric_data,
 
             } else {
                 
-                cat_val_this = prediction_data.ordinal_data[row + (col - model_outputs.ncols_numeric) * nrows];
+                cat_val_this = prediction_data.ordinal_data[row + (col - model_outputs.ncols_numeric - model_outputs.ncols_categ) * nrows];
                 if (cat_val_this < 0) continue;
-                if (cat_val_this >= model_outputs.ncat_ord[col - model_outputs.ncols_numeric]) continue;
+                if (cat_val_this >= model_outputs.ncat_ord[col - model_outputs.ncols_numeric - model_outputs.ncols_categ]) continue;
                 if (!model_outputs.cat_outlier_any_cl[col - model_outputs.ncols_numeric][cat_val_this]) continue;
 
             }
 
             #ifdef _OPENMP
                 #if _OPENMP > 200801 && !defined(_WIN32) && !defined(_WIN64)
-                    found_outliers = follow_tree(model_outputs, prediction_data, 0, 0, row, col, col_is_num, num_val_this, cat_val_this);
+                    found_outliers += follow_tree(model_outputs, prediction_data, 0, 0, row, col, col_is_num, num_val_this, cat_val_this);
                 #else
                     outliers_thread[omp_get_thread_num()] = follow_tree(model_outputs, prediction_data, 0, 0, row, col, col_is_num, num_val_this, cat_val_this)?
                                                             true : outliers_thread[omp_get_thread_num()];
@@ -347,7 +347,7 @@ bool follow_tree(ModelOutputs &model_outputs, PredictionData &prediction_data, s
         return found_outliers;
     }
 
-    /* follow the corresponding branch */
+    /* regular case (not using 'follow_all') - follow the corresponding branch */
     switch(model_outputs.all_trees[col][curr_tree].column_type) {
 
         case NoType:

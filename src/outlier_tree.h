@@ -6,10 +6,12 @@
 *    are observations that seem too distant from the others in a 1-D distribution for the column that the split tries
 *    to "predict" (will not generate a score for each observation).
 *    Splits are based on gain, while outlierness is based on confidence intervals.
-*    Similar in spirit to the GritBot software developed by RuleQuest research.
+*    Similar in spirit to the GritBot software developed by RuleQuest research. Reference article is:
+*      Cortes, David. "Explainable outlier detection through decision tree conditioning."
+*      arXiv preprint arXiv:2001.00636 (2020).
 *    
 *    
-*    Copyright 2019 David Cortes.
+*    Copyright 2020 David Cortes.
 *    
 *    Written for C++11 standard and OpenMP 2.0 or later. Code is meant to be wrapped into scripting languages
 *    such as R or Python.
@@ -89,14 +91,10 @@
 
 
 /* Aliasing for compiler optimizations */
-#ifndef restrict
-    #ifdef __restrict
-        #define restrict __restrict
-    #elif defined(__restrict__)
-        #define restrict __restrict__
-    #else
-        #define restrict 
-    #endif
+#if defined(__GNUG__) || defined(__GNUC__) || defined(_MSC_VER) || defined(__clang__) || defined(__INTEL_COMPILER)
+    #define restrict __restrict
+#else
+    #define restrict 
 #endif
 
 /* MSVC is stuck with an OpenMP version that's 19 years old at the time of writing and does not support unsigned iterators */
@@ -108,6 +106,10 @@
     #endif
 #else
     #define size_t_for size_t
+#endif
+
+#ifndef _OPENMP
+    #define omp_get_thread_num() 0
 #endif
 
 
@@ -151,6 +153,7 @@ typedef struct Cluster {
     std::vector<char> subset_common = std::vector<char>(); /* categorical or ordinal target column (=0 is common) */
     double    perc_in_subset = HUGE_VAL;                   /* categorical or ordinal target column */
     double    perc_next_most_comm = -HUGE_VAL;             /* categorical or ordinal target column */ /* TODO */
+    int       categ_maj = -1;                              /* when using majority-criterion for categorical outliers */
 
     double cluster_mean;              /* used to calculate outlier scores at prediction time */
     double cluster_sd;                /* used to calculate outlier scores at prediction time */
@@ -206,8 +209,7 @@ typedef struct Cluster {
         this->has_NA_branch = has_NA_branch;
     }
 
-    #ifdef Rcpp_hpp
-    /* this is for serialization with Rcereal */
+    /* this is for serialization with cereal */
     template<class Archive>
     void serialize(Archive &archive)
     {
@@ -236,8 +238,9 @@ typedef struct Cluster {
                 this->score_categ
                 );
     }
+
+    /* this is for serialization with both cereal and cython auto-pickle */
     Cluster() {};
-    #endif
     
 } Cluster;
 
@@ -329,8 +332,7 @@ typedef struct ClusterTree {
         this->split_lev = cat_chosen;
     }
 
-    #ifdef Rcpp_hpp
-    /* this is for serialization with Rcereal */
+    /* this is for serialization with cereal */
     template<class Archive>
     void serialize(Archive &archive)
     {
@@ -351,8 +353,9 @@ typedef struct ClusterTree {
                 this->binary_branches
                 );
     }
+
+    /* this is for serialization with both cereal and cython auto-pickle */
     ClusterTree() {};
-    #endif
 
 } ClusterTree;
 
@@ -381,8 +384,7 @@ typedef struct ModelOutputs {
     size_t max_depth;                                   /* redundant info which speeds up prediction */
 
 
-    #ifdef Rcpp_hpp
-    /* this is for serialization with Rcereal */
+    /* this is for serialization with cereal */
     template<class Archive>
     void serialize(Archive &archive)
     {
@@ -410,8 +412,9 @@ typedef struct ModelOutputs {
                 this->max_depth
                 );
     }
+
+    /* this is for serialization with both cereal and cython auto-pickle */
     ModelOutputs() {};
-    #endif
 
 } ModelOutputs;
 
@@ -435,9 +438,9 @@ bool fit_outliers_models(ModelOutputs &model_outputs,
                          int    *restrict categorical_data, size_t ncols_categ,   int *restrict ncat,
                          int    *restrict ordinal_data,     size_t ncols_ord,     int *restrict ncat_ord,
                          size_t nrows, char *restrict cols_ignore = NULL, int nthreads = 1,
-                         bool categ_as_bin = true, bool ord_as_bin = true, bool cat_bruteforce_subset = false,
-                         size_t max_depth = 3, double max_perc_outliers = 0.01, size_t min_size_numeric = 25, size_t min_size_categ = 75,
-                         double min_gain = 1e-1, bool follow_all = false, double z_norm = 2.67, double z_outlier = 8.0);
+                         bool categ_as_bin = true, bool ord_as_bin = true, bool cat_bruteforce_subset = false, bool categ_from_maj = false,
+                         size_t max_depth = 3, double max_perc_outliers = 0.01, size_t min_size_numeric = 25, size_t min_size_categ = 50,
+                         double min_gain = 1e-2, bool gain_as_pct = false, bool follow_all = false, double z_norm = 2.67, double z_outlier = 8.0);
 
 typedef struct {
     
@@ -449,7 +452,8 @@ typedef struct {
     std::vector<size_t> outlier_trees;    /* these hold the model outputs for 1 column before combining them */
     std::vector<size_t> outlier_depth;    /* these hold the model outputs for 1 column before combining them */
     size_t target_col_num;                /* if categorical or ordinal, gets subtracted the number of numeric columns (used to index other arrays) */
-    double sd_y;                          /* numerical only (standard deviation before splitting */
+    long double sd_y;                     /* numerical only (standard deviation before splitting) */
+    double mean_y;                        /* numerical only (used to standardize numbers for extra FP precision) */
     long double base_info;                /* categorical and ordinal (information before splitting and before binarizing) */
     long double base_info_orig;           /* categorical and ordinal (information before splitting and after binarizing if needed) */
     bool log_transf;                      /* numerical - whether the target variable underwent a logarithmic transformation */
@@ -468,6 +472,7 @@ typedef struct {
 
     bool col_is_bin;                      /* whether the target categorical/ordinal column has 2 categories or has been forcibly binarized */
     long double *prop_small_this;         /* dynamic pointer */
+    long double *prior_prob;              /* dynamic pointer */
 
     double orig_mean;                     /* value to reconstruct originals from exponentiated */
     double orig_sd;                       /* value to reconstruct originals from exponentiated */
@@ -477,12 +482,12 @@ typedef struct {
     int *temp_ptr_x;                      /* dynamic pointer */
 
     std::vector<char> buffer_subset_categ_best;  /* categorical split that gave the best gain */
-    double this_gain;                            /* buffer where to store gain */
+    long double this_gain;                       /* buffer where to store gain */
     double this_split_point;                     /* numeric split threshold */
     int this_split_lev;                          /* ordinal split threshold */
     size_t this_split_ix;                        /* index at which the data is partitioned */
     size_t this_split_NA;                        /* index at which the non-NA values start */
-    double best_gain;                            /* buffer where to store the info of the splitting column that produced the highest gain */
+    long double best_gain;                       /* buffer where to store the info of the splitting column that produced the highest gain */
     ColType column_type_best;                    /* buffer where to store the info of the splitting column that produced the highest gain */
     double split_point_best;                     /* buffer where to store the info of the splitting column that produced the highest gain */
     int split_lev_best;                          /* buffer where to store the info of the splitting column that produced the highest gain */
@@ -495,6 +500,7 @@ typedef struct {
     std::vector<size_t>      buffer_cat_sorted;      /* buffer arrays where to allocate values required by functions and not used outside them */
     std::vector<char>        buffer_subset_categ;    /* buffer arrays where to allocate values required by functions and not used outside them */
     std::vector<char>        buffer_subset_outlier;  /* buffer arrays where to allocate values required by functions and not used outside them */
+    std::vector<long double> buffer_sd;              /* used for a more numerically-stable two-pass gain calculation */
     
     bool drop_cluster;          /* for categorical and ordinal variables, not all clusters can flag observations as outliers, so those are not kept */
     bool already_split_main;    /* when binarizing categoricals/ordinals, avoid attempting the same split with numerical and ordinals that take the non-binarized data */
@@ -505,18 +511,20 @@ typedef struct {
 
 /* info holders to shorten function call arguments */
 typedef struct {
-    bool categ_as_bin;
-    bool ord_as_bin;
-    bool cat_bruteforce_subset;
-    size_t max_depth;
-    double max_perc_outliers;
-    size_t min_size_numeric;
-    size_t min_size_categ;
-    double min_gain;
-    bool follow_all;
-    double z_norm;
-    double z_outlier;
-    double z_tail;
+    bool    categ_as_bin;
+    bool    ord_as_bin;
+    bool    cat_bruteforce_subset;
+    bool    categ_from_maj;
+    size_t  max_depth;
+    double  max_perc_outliers;
+    size_t  min_size_numeric;
+    size_t  min_size_categ;
+    double  min_gain;
+    bool    gain_as_pct;
+    bool    follow_all;
+    double  z_norm;
+    double  z_outlier;
+    double  z_tail;
     std::vector<long double> prop_small; /* this is not a parameter, but a shared array determined from the parameters and data */
 } ModelParams;
 
@@ -608,44 +616,45 @@ typedef struct {
 void subset_to_onehot(size_t ix_arr[], size_t n_true, size_t n_tot, bool onehot[]);
 size_t move_zero_count_to_front(size_t *restrict cat_sorted, size_t *restrict cat_cnt, size_t ncat_x);
 void flag_zero_counts(char split_subset[], size_t buffer_cat_cnt[], size_t ncat_x);
-double calc_sd(size_t cnt, long double sum, long double sum_sq);
-double calc_sd(NumericBranch &branch);
-double calc_sd(size_t ix_arr[], double x[], size_t st, size_t end);
-double numeric_gain(NumericSplit &split_info, double tot_sd);
+long double calc_sd(size_t cnt, long double sum, long double sum_sq);
+long double calc_sd(NumericBranch &branch);
+long double calc_sd(size_t ix_arr[], double *restrict x, size_t st, size_t end, double *restrict mean);
+long double numeric_gain(NumericSplit &split_info, long double tot_sd);
+long double numeric_gain(long double tot_sd, long double info_left, long double info_right, long double info_NA, long double cnt);
 long double total_info(size_t categ_counts[], size_t ncat);
 long double total_info(size_t categ_counts[], size_t ncat, size_t tot);
 long double total_info(size_t *restrict ix_arr, int *restrict x, size_t st, size_t end, size_t ncat, size_t *restrict buffer_cat_cnt);
-double categ_gain(CategSplit split_info, long double base_info);
-double categ_gain(size_t *restrict categ_counts, size_t ncat, size_t *restrict ncat_col, size_t maxcat, long double base_info, size_t tot);
-double categ_gain_from_split(size_t *restrict ix_arr, int *restrict x, size_t st, size_t st_non_na, size_t split_ix, size_t end,
-                             size_t ncat, size_t *restrict buffer_cat_cnt, long double base_info);
+long double categ_gain(CategSplit split_info, long double base_info);
+long double categ_gain(size_t *restrict categ_counts, size_t ncat, size_t *restrict ncat_col, size_t maxcat, long double base_info, size_t tot);
+long double categ_gain_from_split(size_t *restrict ix_arr, int *restrict x, size_t st, size_t st_non_na, size_t split_ix, size_t end,
+                                  size_t ncat, size_t *restrict buffer_cat_cnt, long double base_info);
 void split_numericx_numericy(size_t *restrict ix_arr, size_t st, size_t end, double *restrict x, double *restrict y,
-                             double sd_y, bool has_na, size_t min_size,
-                             double *restrict gain, double *restrict split_point, size_t *restrict split_left, size_t *restrict split_NA);
-void split_categx_numericy(size_t *restrict ix_arr, size_t st, size_t end, int *restrict x, double *restrict y, double sd_y,
+                             long double sd_y, bool has_na, size_t min_size, long double *restrict buffer_sd,
+                             long double *restrict gain, double *restrict split_point, size_t *restrict split_left, size_t *restrict split_NA);
+void split_categx_numericy(size_t *restrict ix_arr, size_t st, size_t end, int *restrict x, double *restrict y, long double sd_y, double ymean,
                            bool x_is_ordinal, size_t ncat_x, size_t *restrict buffer_cat_cnt, long double *restrict buffer_cat_sum,
                            long double *restrict buffer_cat_sum_sq, size_t *restrict buffer_cat_sorted,
-                           bool has_na, size_t min_size, double *gain, char *restrict split_subset, int *restrict split_point);
+                           bool has_na, size_t min_size, long double *gain, char *restrict split_subset, int *restrict split_point);
 void split_numericx_categy(size_t *restrict ix_arr, size_t st, size_t end, double *restrict x, int *restrict y,
                            size_t ncat_y, long double base_info, size_t *restrict buffer_cat_cnt,
-                           bool has_na, size_t min_size, double *restrict gain, double *restrict split_point,
+                           bool has_na, size_t min_size, long double *restrict gain, double *restrict split_point,
                            size_t *restrict split_left, size_t *restrict split_NA);
 void split_ordx_categy(size_t *restrict ix_arr, size_t st, size_t end, int *restrict x, int *restrict y,
                        size_t ncat_y, size_t ncat_x, long double base_info,
                        size_t *restrict buffer_cat_cnt, size_t *restrict buffer_crosstab, size_t *restrict buffer_ord_cnt,
-                       bool has_na, size_t min_size, double *gain, int *split_point);
+                       bool has_na, size_t min_size, long double *gain, int *split_point);
 void split_categx_biny(size_t *restrict ix_arr, size_t st, size_t end, int *restrict x, int *restrict y,
                        size_t ncat_x, long double base_info,
                        size_t *restrict buffer_cat_cnt, size_t *restrict buffer_crosstab, size_t *restrict buffer_cat_sorted,
-                       bool has_na, size_t min_size, double *gain, char *restrict split_subset);
+                       bool has_na, size_t min_size, long double *gain, char *restrict split_subset);
 void split_categx_categy_separate(size_t *restrict ix_arr, size_t st, size_t end, int *restrict x, int *restrict y,
                                   size_t ncat_x, size_t ncat_y, long double base_info,
                                   size_t *restrict buffer_cat_cnt, size_t *restrict buffer_crosstab,
-                                  bool has_na, size_t min_size, double *gain);
+                                  bool has_na, size_t min_size, long double *gain);
 void split_categx_categy_subset(size_t *restrict ix_arr, size_t st, size_t end, int *restrict x, int *restrict y,
                                 size_t ncat_x, size_t ncat_y, long double base_info,
                                 size_t *restrict buffer_cat_cnt, size_t *restrict buffer_crosstab, size_t *restrict buffer_split,
-                                bool has_na, size_t min_size, double *gain, char *restrict split_subset);
+                                bool has_na, size_t min_size, long double *gain, char *restrict split_subset);
 
 
 
@@ -666,12 +675,15 @@ void define_categ_cluster_no_cond(int *restrict x, size_t *restrict ix_arr, size
                                   double *restrict outlier_scores, size_t *restrict outlier_clusters, size_t *restrict outlier_trees,
                                   size_t *restrict outlier_depth, Cluster &cluster,
                                   size_t *restrict categ_counts, char *restrict is_outlier, double perc_next_most_comm);
-bool define_categ_cluster(int *restrict x, size_t *restrict ix_arr, size_t st, size_t end, size_t ncateg,
+bool define_categ_cluster(int *restrict x, size_t *restrict ix_arr, size_t st, size_t end, size_t ncateg, bool by_maj,
                           double *restrict outlier_scores, size_t *restrict outlier_clusters, size_t *restrict outlier_trees,
-                          size_t *restrict outlier_depth, Cluster &cluster, std::vector<Cluster> &clusters, size_t cluster_num, size_t tree_num, size_t tree_depth,
-                          double max_perc_outliers, double z_norm, long double *restrict perc_threshold,
+                          size_t *restrict outlier_depth, Cluster &cluster, std::vector<Cluster> &clusters,
+                          size_t cluster_num, size_t tree_num, size_t tree_depth,
+                          double max_perc_outliers, double z_norm, double z_outlier,
+                          long double *restrict perc_threshold, long double *restrict prop_prior,
                           size_t *restrict buffer_categ_counts, long double *restrict buffer_categ_pct,
-                          size_t *restrict buffer_categ_ix, char *restrict buffer_outliers, bool *restrict drop_cluster);
+                          size_t *restrict buffer_categ_ix, char *restrict buffer_outliers,
+                          bool *restrict drop_cluster);
 void simplify_when_equal_cond(std::vector<Cluster> &clusters, int ncat_ord[]);
 void simplify_when_equal_cond(std::vector<ClusterTree> &trees, int ncat_ord[]);
 #ifdef TEST_MODE_DEFINE
@@ -689,6 +701,9 @@ void calculate_cluster_poss_categs(ModelOutputs &model_outputs, size_t col, size
 void find_outlier_categories(size_t categ_counts[], size_t ncateg, size_t tot, double max_perc_outliers,
                              long double perc_threshold[], size_t buffer_ix[], long double buffer_perc[],
                              double z_norm, char is_outlier[], bool *found_outliers, bool *new_is_outlier, double *next_most_comm);
+void find_outlier_categories_by_maj(size_t categ_counts[], size_t ncateg, size_t tot, double max_perc_outliers,
+                                    long double prior_prob[], double z_outlier, char is_outlier[],
+                                    bool *found_outliers, bool *new_is_outlier, int *categ_maj);
 bool find_outlier_categories_no_cond(size_t categ_counts[], size_t ncateg, size_t tot,
                                      char is_outlier[], double *next_most_comm);
 
@@ -757,3 +772,4 @@ void set_tree_as_ordinal(ClusterTree &tree, int split_lev, size_t col);
 void forget_row_outputs(ModelOutputs &model_outputs);
 void allocate_row_outputs(ModelOutputs &model_outputs, size_t nrows, size_t max_depth);
 void check_more_two_values(double arr_num[], size_t nrows, size_t ncols, int nthreads, char too_few_values[]);
+void dealloc_ModelOutputs(ModelOutputs &model_outputs);

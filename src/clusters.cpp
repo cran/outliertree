@@ -6,10 +6,12 @@
 *    are observations that seem too distant from the others in a 1-D distribution for the column that the split tries
 *    to "predict" (will not generate a score for each observation).
 *    Splits are based on gain, while outlierness is based on confidence intervals.
-*    Similar in spirit to the GritBot software developed by RuleQuest research.
+*    Similar in spirit to the GritBot software developed by RuleQuest research. Reference article is:
+*      Cortes, David. "Explainable outlier detection through decision tree conditioning."
+*      arXiv preprint arXiv:2001.00636 (2020).
 *    
 *    
-*    Copyright 2019 David Cortes.
+*    Copyright 2020 David Cortes.
 *    
 *    Written for C++11 standard and OpenMP 2.0 or later. Code is meant to be wrapped into scripting languages
 *    such as R or Python.
@@ -101,7 +103,8 @@
 */
 bool define_numerical_cluster(double *restrict x, size_t *restrict ix_arr, size_t st, size_t end,
                               double *restrict outlier_scores, size_t *restrict outlier_clusters, size_t *restrict outlier_trees,
-                              size_t *restrict outlier_depth, Cluster &cluster, std::vector<Cluster> &clusters, size_t cluster_num, size_t tree_num, size_t tree_depth,
+                              size_t *restrict outlier_depth, Cluster &cluster, std::vector<Cluster> &clusters,
+                              size_t cluster_num, size_t tree_num, size_t tree_depth,
                               bool is_log_transf, double log_minval, bool is_exp_transf, double orig_mean, double orig_sd,
                               double left_tail, double right_tail, double *restrict orig_x,
                               double max_perc_outliers, double z_norm, double z_outlier)
@@ -110,24 +113,28 @@ bool define_numerical_cluster(double *restrict x, size_t *restrict ix_arr, size_
     /*  TODO: this function could try to determine if the distribution is multimodal, and if so,
         take only the most extreme means/sd for outlier comparisons */
 
-    /*  TODO: statistics like SD, sum, sum_sq; are already available from the splitting function which
+    /*  TODO: statistics like SD, mean; are already available from the splitting function which
         is called right before this, so these should *only* need to be recalculated them if the column
         has undergone log or exp transform */
 
     /* NAs and Inf should have already been removed, and outliers with fewer conditionals already discarded */
     bool has_low_values  = false;
     bool has_high_values = false;
-    long double sum      = 0;
-    long double sum_sq   = 0;
+    long double running_mean = 0;
+    long double mean_prev    = 0;
+    long double running_ssq  = 0;
+    double xval;
     double mean;
     double sd;
     size_t cnt;
     size_t tail_size     = (size_t) calculate_max_outliers((long double)(end - st + 1), max_perc_outliers);
-    size_t st_non_tail   = st + tail_size;
+    size_t st_non_tail   = st  + tail_size;
     size_t end_non_tail  = end - tail_size;
     size_t st_normals    = 0;
     size_t end_normals   = 0;
     double min_gap = z_outlier - z_norm;
+
+    /* TODO: here it's not necessary to sort the whole data, only top/bottom N */
 
     /* sort the data */
     std::sort(ix_arr + st, ix_arr + end + 1, [&x](const size_t a, const size_t b){return x[a] < x[b];});
@@ -135,11 +142,15 @@ bool define_numerical_cluster(double *restrict x, size_t *restrict ix_arr, size_
     /* calculate statistics with tails and previous outliers excluded */
     cnt = end_non_tail - st_non_tail + 1;
     for (size_t row = st_non_tail; row <= end_non_tail; row++) {
-        sum    += x[ ix_arr[row] ];
-        sum_sq += square(x[ ix_arr[row] ]);
+        xval = x[ ix_arr[row] ];
+        running_mean += (xval - running_mean) / (long double)(row - st_non_tail + 1);
+        running_ssq  += (xval - running_mean) * (xval - mean_prev);
+        mean_prev     = running_mean;
+
     }
-    mean = sum / cnt;
-    sd = calc_sd(cnt, sum, sum_sq);
+    mean = (double) running_mean;
+    sd   = (double) sqrtl(running_ssq / (long double)(cnt - 1));
+
     /* adjust SD heuristically to account for reduced size, by (N + tail)/(N-tail) --- note that cnt = N-2*tail */
     sd *= (long double)(cnt + 3 * tail_size) / (long double)(cnt + tail_size);
     /* re-adjust if there's a one-sided tail and no transformation was applies */
@@ -148,28 +159,6 @@ bool define_numerical_cluster(double *restrict x, size_t *restrict ix_arr, size_
     }
     cluster.cluster_mean = mean;
     cluster.cluster_sd = sd;
-
-    /* calculate the full mean and sd for cluster statistics */
-    if (is_log_transf || is_exp_transf) {
-
-        sum    = 0;
-        sum_sq = 0;
-        for (size_t row = st; row <= end; row++) {
-            sum    += orig_x[ix_arr[row]];
-            sum_sq += square(orig_x[ix_arr[row]]);
-        }
-
-    } else {
-
-        for (size_t row = st; row < st_non_tail; row++) {
-            sum    += x[ ix_arr[row] ];
-            sum_sq += square(x[ ix_arr[row] ]);
-        }
-        for (size_t row = end_non_tail + 1; row <= end; row++) {
-            sum    += x[ ix_arr[row] ];
-            sum_sq += square(x[ ix_arr[row] ]);
-        }
-    }
     cnt = end - st + 1;
 
     /* see if the minimum and/or maximum values qualify for outliers */
@@ -224,11 +213,8 @@ bool define_numerical_cluster(double *restrict x, size_t *restrict ix_arr, size_
                     outlier_trees[ix_arr[row]] = tree_num;
                     outlier_depth[ix_arr[row]] = tree_depth;
                 }
-                sum    -= orig_x[ix_arr[row]];
-                sum_sq -= square(orig_x[ix_arr[row]]);
 
             }
-            cnt -= st_normals - st;
         }
     }
     if (!has_low_values) {
@@ -275,7 +261,7 @@ bool define_numerical_cluster(double *restrict x, size_t *restrict ix_arr, size_
         } else {
             for (size_t row = end; row > end_normals; row--) {
 
-                /*    assign outlier if it's a better cluster than previously assigned - Note that it might produce slight mismatches
+                /*  assign outlier if it's a better cluster than previously assigned - Note that it might produce slight mismatches
                     against the predict function (the latter is more trustable) due to the size of the cluster not yet being known
                     at the moment of determinining whether to overwrite previous in here */
                 if (
@@ -300,11 +286,8 @@ bool define_numerical_cluster(double *restrict x, size_t *restrict ix_arr, size_
                     outlier_trees[ix_arr[row]] = tree_num;
                     outlier_depth[ix_arr[row]] = tree_depth;
                 }
-                sum    -= orig_x[ix_arr[row]];
-                sum_sq -= square(orig_x[ix_arr[row]]);
 
             }
-            cnt -= end - end_normals;
         }
     }
     if (!has_high_values) {
@@ -325,10 +308,27 @@ bool define_numerical_cluster(double *restrict x, size_t *restrict ix_arr, size_
         cluster.display_lim_high = orig_x[ix_arr[end]];
     }
 
-    /* save statistics for cluster */
-    cluster.display_mean = sum / cnt;
-    cluster.display_sd = calc_sd(cnt, sum, sum_sq);
-    cluster.cluster_size = cnt;
+    /* save displayed statistics for cluster */
+    if (has_high_values || has_low_values || is_log_transf || is_exp_transf) {
+        size_t st_disp  = has_low_values?  st_normals  : st;
+        size_t end_disp = has_high_values? end_normals : end;
+        running_mean = 0;
+        mean_prev    = 0;
+        running_ssq  = 0;
+        for (size_t row = st_disp; row <= end_disp; row++) {
+            xval = orig_x[ix_arr[row]];
+            running_mean += (xval - running_mean) / (long double)(row - st_disp + 1);
+            running_ssq  += (xval - running_mean) * (xval - mean_prev);
+            mean_prev     = running_mean;
+        }
+        cluster.cluster_size = end_disp - st_disp + 1;
+        cluster.display_mean = (double) running_mean;
+        cluster.display_sd   = (double) sqrtl(running_ssq / (long double)(cluster.cluster_size - 1));
+    } else {
+        cluster.display_mean = cluster.cluster_mean;
+        cluster.display_sd   = cluster.cluster_sd;
+        cluster.cluster_size = end - st + 1;
+    }
 
     /* report whether outliers were found or not */
     return has_low_values || has_high_values;
@@ -419,6 +419,9 @@ void define_categ_cluster_no_cond(int *restrict x, size_t *restrict ix_arr, size
 *        Position at which ix_arr ends (inclusive).
 *    - ncateg (in)
 *        Number of categories in this column.
+*    - by_maj (in)
+*        Model parameter. Default is 'false'. Indicates whether to detect outliers according to the number of non-majority
+*        obsevations compared to the expected number for each category.
 *    - outlier_scores[n] (in, out)
 *        Outlier scores (based on observed category proportion) that are already assigned to the observations from this column
 *        from previous runs of this function in larger subsets (should be started to 1).
@@ -442,8 +445,12 @@ void define_categ_cluster_no_cond(int *restrict x, size_t *restrict ix_arr, size
 *        Model parameter. Default is 0.01.
 *    - z_norm (in)
 *        Model parameter. Default is 2.67.
-*    - perc_threshold[ncateg]
+*    - z_outlier (in)
+*        Model parameter. Default is 8.0.
+*    - perc_threshold[ncateg] (in)
 *        Observed proportion below which a category can be considered as outlier.
+*    - prop_prior[ncateg] (in)
+*        Prior probability of each category in the full data (only used when passing 'by_maj' = 'true').
 *    - buffer_categ_counts[ncateg] (temp)
 *        Buffer where to save the observed frequencies of each category.
 *    - buffer_categ_pct[ncateg] (temp)
@@ -460,12 +467,15 @@ void define_categ_cluster_no_cond(int *restrict x, size_t *restrict ix_arr, size
 *    Returns:
 *        - Whether it identified any outliers or not.
 */
-bool define_categ_cluster(int *restrict x, size_t *restrict ix_arr, size_t st, size_t end, size_t ncateg,
+bool define_categ_cluster(int *restrict x, size_t *restrict ix_arr, size_t st, size_t end, size_t ncateg, bool by_maj,
                           double *restrict outlier_scores, size_t *restrict outlier_clusters, size_t *restrict outlier_trees,
-                          size_t *restrict outlier_depth, Cluster &cluster, std::vector<Cluster> &clusters, size_t cluster_num, size_t tree_num, size_t tree_depth,
-                          double max_perc_outliers, double z_norm, long double *restrict perc_threshold,
+                          size_t *restrict outlier_depth, Cluster &cluster, std::vector<Cluster> &clusters,
+                          size_t cluster_num, size_t tree_num, size_t tree_depth,
+                          double max_perc_outliers, double z_norm, double z_outlier,
+                          long double *restrict perc_threshold, long double *restrict prop_prior,
                           size_t *restrict buffer_categ_counts, long double *restrict buffer_categ_pct,
-                          size_t *restrict buffer_categ_ix, char *restrict buffer_outliers, bool *restrict drop_cluster)
+                          size_t *restrict buffer_categ_ix, char *restrict buffer_outliers,
+                          bool *restrict drop_cluster)
 {
     bool found_outliers, new_is_outlier;
     size_t tot = end - st + 1;
@@ -482,10 +492,15 @@ bool define_categ_cluster(int *restrict x, size_t *restrict ix_arr, size_t st, s
     }
 
     /* flag categories as outliers if appropriate */
-    find_outlier_categories(buffer_categ_counts, ncateg, tot, max_perc_outliers,
-                            perc_threshold, buffer_categ_ix, buffer_categ_pct,
-                            z_norm, buffer_outliers, &found_outliers,
-                            &new_is_outlier, &(cluster.perc_next_most_comm));
+    if (!by_maj)
+        find_outlier_categories(buffer_categ_counts, ncateg, tot, max_perc_outliers,
+                                perc_threshold, buffer_categ_ix, buffer_categ_pct,
+                                z_norm, buffer_outliers, &found_outliers,
+                                &new_is_outlier, &cluster.perc_next_most_comm);
+    else
+        find_outlier_categories_by_maj(buffer_categ_counts, ncateg, tot, max_perc_outliers,
+                                       prop_prior, z_outlier, buffer_outliers,
+                                       &found_outliers, &new_is_outlier, &cluster.categ_maj);
 
     if (found_outliers) {
         for (size_t row = st; row <= end; row++) {
@@ -508,9 +523,14 @@ bool define_categ_cluster(int *restrict x, size_t *restrict ix_arr, size_t st, s
                         )
                     )
                 {
-                    pct_outl = (long double)buffer_categ_counts[ x[ix_arr[row]] ] / tot_dbl;
-                    pct_outl = pct_outl + sqrt(pct_outl * (1 - pct_outl) / tot_dbl);
-                    outlier_scores[ix_arr[row]] = pct_outl;
+                    if (!by_maj) {
+                        pct_outl = (long double)buffer_categ_counts[ x[ix_arr[row]] ] / tot_dbl;
+                        pct_outl = pct_outl + sqrt(pct_outl * (1 - pct_outl) / tot_dbl);
+                        outlier_scores[ix_arr[row]] = pct_outl;
+                    } else {
+                        pct_outl = (long double)(tot - buffer_categ_counts[cluster.categ_maj]) / (tot_dbl * prop_prior[ x[ix_arr[row]] ]);
+                        outlier_scores[ix_arr[row]] = square(pct_outl);
+                    }
                     outlier_clusters[ix_arr[row]] = cluster_num;
                     outlier_trees[ix_arr[row]] = tree_num;
                     outlier_depth[ix_arr[row]] = tree_depth;
@@ -531,14 +551,31 @@ bool define_categ_cluster(int *restrict x, size_t *restrict ix_arr, size_t st, s
         cluster.cluster_size = sz_maj;
         cluster.subset_common.assign(buffer_outliers, buffer_outliers + ncateg);
         cluster.score_categ.resize(ncateg, 0);
-        for (size_t cat = 0; cat < ncateg; cat++) {
-            if (cluster.subset_common[cat] > 0) {
-                pct_outl = (long double)buffer_categ_counts[cat] / tot_dbl;
-                cluster.score_categ[cat] = pct_outl + sqrt(pct_outl * (1 - pct_outl) / tot_dbl);
-            } else if (cluster.subset_common[cat] < 0) {
-                pct_outl = (long double)1 / (long double)(tot + 2);
-                cluster.score_categ[cat] = pct_outl + sqrt(pct_outl * (1 - pct_outl) / (long double)(tot + 2));
+        if (!by_maj) {
+
+            for (size_t cat = 0; cat < ncateg; cat++) {
+                if (cluster.subset_common[cat] > 0) {
+                    pct_outl = (long double)buffer_categ_counts[cat] / tot_dbl;
+                    cluster.score_categ[cat] = pct_outl + sqrt(pct_outl * (1 - pct_outl) / tot_dbl);
+                } else if (cluster.subset_common[cat] < 0) {
+                    pct_outl = (long double)1 / (long double)(tot + 2);
+                    cluster.score_categ[cat] = pct_outl + sqrt(pct_outl * (1 - pct_outl) / (long double)(tot + 2));
+                }
             }
+
+        } else {
+
+            cluster.perc_in_subset = (long double) buffer_categ_counts[cluster.categ_maj] / tot_dbl;
+            for (size_t cat = 0; cat < ncateg; cat++) {
+                if (cat == cluster.categ_maj)
+                    continue;
+                if (cluster.subset_common[cat] != 0) {
+                    cluster.score_categ[cat] = (long double)(tot - buffer_categ_counts[cluster.categ_maj] + 1)
+                                                            / ((long double)(tot + 2) * prop_prior[cat]);
+                    cluster.score_categ[cat] = square(cluster.score_categ[cat]);
+                }
+            }
+
         }
     } else {
         *drop_cluster = true;
