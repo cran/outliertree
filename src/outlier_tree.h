@@ -51,6 +51,12 @@
 #ifdef _OPENMP
     #include <omp.h>
 #endif
+#ifdef _FOR_R
+    #include <Rcpp.h>
+#endif
+#include <signal.h>
+typedef void (*sig_t_)(int);
+
 
 /************************
     Short Functions
@@ -756,3 +762,20 @@ void check_more_two_values(double arr_num[], size_t nrows, size_t ncols, int nth
 void calc_min_decimals_to_print(ModelOutputs &model_outputs, double *restrict numeric_data, int nthreads);
 int decimals_diff(double val1, double val2);
 void dealloc_ModelOutputs(ModelOutputs &model_outputs);
+
+extern bool interrupt_switch;
+void set_interrup_global_variable(int s);
+class SignalSwitcher
+{
+public:
+    sig_t_ old_sig;
+    bool is_active;
+    SignalSwitcher();
+    ~SignalSwitcher();
+    void restore_handle();
+};
+void check_interrupt_switch(SignalSwitcher &ss);
+#ifdef _FOR_PYTHON
+bool cy_check_interrupt_switch();
+void cy_tick_off_interrupt_switch();
+#endif

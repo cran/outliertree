@@ -1,3 +1,10 @@
+#' @importFrom parallel detectCores
+#' @importFrom stats predict
+#' @importFrom utils head
+#' @importFrom Rcpp evalCpp
+#' @useDynLib outliertree, .registration=TRUE
+NULL
+
 #' @title Outlier Tree
 #' @description Fit Outlier Tree model to normal data with perhaps some outliers.
 #' @param df  Data Frame with normal data that might contain some outliers. See details for allowed column types.
@@ -123,8 +130,11 @@
 #' outliers <- extract.training.outliers(model)
 #' summary(outliers)
 #' 
-#' ### information for row 745
+#' ### information for row 745 (list of lists)
 #' outliers[[745]]
+#' 
+#' ### outliers can be sliced too
+#' outliers[700:1000]
 #' 
 #' ### use custom row names
 #' df.w.names <- hypothyroid
@@ -284,6 +294,9 @@ outlier.tree <- function(df, max_depth = 4L, min_gain = 1e-2, z_norm = 2.67, z_o
 #' 
 #' ### retrieve the outlier info (for row 1) as an R list
 #' test_outliers[[1]]
+#' 
+#' ### to turn it into a 6-column table:
+#' # dt = t(data.table::as.data.table(test_outliers))
 #' @export 
 predict.outliertree <- function(object, newdata, outliers_print = 15L, min_decimals = 2L,
                                 return_outliers = TRUE, ...) {
@@ -340,7 +353,7 @@ predict.outliertree <- function(object, newdata, outliers_print = 15L, min_decim
 #' data frame were null, or the row names they had if non-null). Pass `NULL` to print information
 #' about potentially all rows
 #' @param ... Not used.
-#' @return No return value.
+#' @return The same input `x` that was passed (as `invisible`).
 #' @seealso \link{outlier.tree} \link{predict.outliertree}
 #' @examples 
 #' ### Example re-printing results for selected rows
@@ -363,7 +376,7 @@ predict.outliertree <- function(object, newdata, outliers_print = 15L, min_decim
 #' print(pred, only_these_rows = c(531, 532))
 #' @export 
 print.outlieroutputs <- function(x, outliers_print = 15L, min_decimals = 2L, only_these_rows = NULL, ...) {
-    if (NROW(x) == 0) { report.no.outliers(); return(invisible(NULL)); }
+    if (NROW(x) == 0) { report.no.outliers(); return(invisible(x)); }
     outliers_print <- check.outliers.print(outliers_print)
     if (!outliers_print) { stop("Must pass a positive integer for 'outliers_print'.") }
     if (is.null(only_these_rows)) {
@@ -373,6 +386,36 @@ print.outlieroutputs <- function(x, outliers_print = 15L, min_decimals = 2L, onl
         outliers_info <- list.to.outliers(x[only_these_rows])
         report.outliers(outliers_info, names(x[only_these_rows]), outliers_print, min_decimals)
     }
+    return(invisible(x))
+}
+
+#' @title Convert outlier outputs to R list
+#' @description Converts outliers results (an object as returned from \link{predict.outliertree}
+#' or from \link{extract.training.outliers}) to an R list which can be modified
+#' programatically.
+#' @param x Outliers flagged by an \link{outlier.tree} model, returned by e.g. the
+#' prediction function.
+#' @param ... Not used.
+#' @return The same outliers as a list of lists.
+#' @export 
+as.list.outlieroutputs <- function(x, ...) {
+    class(x) <- "list"
+    return(x)
+}
+
+#' @title Slice or sub-set outliers
+#' @description Select given rows from outlier results.
+#' @param x An object of class `outlieroutputs`, as returned by e.g. \link{predict.outliertree}.
+#' @param i Rows to select. Can pass numbers or strings. Works the same as when selecting
+#' elements from a list.
+#' @return An object of class `outlieroutputs` containing only the selected rows.
+#' @export 
+`[.outlieroutputs` <- function(x, i) {
+    old_class <- class(x)
+    x <- as.list(x)
+    x <- x[i]
+    class(x) <- old_class
+    return(x)
 }
 
 #' @title Extract outliers found in training data

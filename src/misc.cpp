@@ -683,3 +683,77 @@ void dealloc_ModelOutputs(ModelOutputs &model_outputs)
 {
     model_outputs.~ModelOutputs();
 }
+
+/* Function to handle interrupt signals */
+void set_interrup_global_variable(int s)
+{
+    #pragma omp critical
+    {
+        interrupt_switch = true;
+    }
+}
+
+void check_interrupt_switch(SignalSwitcher &ss)
+{
+    if (interrupt_switch)
+    {
+        ss.restore_handle();
+        #ifndef _FOR_R
+        fprintf(stderr, "Error: procedure was interrupted\n");
+        #else
+        REprintf("Error: procedure was interrupted\n");
+        #endif
+        raise(SIGINT);
+        #ifdef _FOR_R
+        Rcpp::checkUserInterrupt();
+        #elif !defined(DONT_THROW_ON_INTERRUPT)
+        throw "Error: procedure was interrupted.\n";
+        #endif
+    }
+}
+
+#ifdef _FOR_PYTHON
+bool cy_check_interrupt_switch()
+{
+    return interrupt_switch;
+}
+void cy_tick_off_interrupt_switch()
+{
+    interrupt_switch = false;
+}
+#endif
+
+SignalSwitcher::SignalSwitcher()
+{
+    #pragma omp critical
+    {
+        interrupt_switch = false;
+        this->old_sig = signal(SIGINT, set_interrup_global_variable);
+        this->is_active = true;
+    }
+}
+
+SignalSwitcher::~SignalSwitcher()
+{
+    #pragma omp critical
+    {
+        if (this->is_active)
+            signal(SIGINT, this->old_sig);
+        this->is_active = false;
+        #ifndef _FOR_PYTHON
+        interrupt_switch = false;
+        #endif
+    }
+}
+
+void SignalSwitcher::restore_handle()
+{
+    #pragma omp critical
+    {
+        if (this->is_active)
+        {
+            signal(SIGINT, this->old_sig);
+            this->is_active = false;
+        }
+    }
+}
