@@ -1,4 +1,4 @@
-e7f918051f1ea35b8be12e16d9597b23 *DESCRIPTION
+09c3b26be5c45faed8edfbd8864518d0 *DESCRIPTION
 f2f84a6270f5aef385a2a886f1246758 *NAMESPACE
 cd011562a496abe949f9c67b0e70c7e8 *R/RcppExports.R
 e89f8e9179527df974b7fdb0b0cbddfb *R/helpers.R
@@ -20,10 +20,10 @@ e4f9598822d1683a4810f8b70b3f719d *man/summary.outliertree.Rd
 78d2bc9006273f4c601fc7bbfde77904 *man/unpack.outlier.tree.Rd
 de413d15ec2e4e74faf23a7afb8e603f *src/Makevars
 79eea95bea118e04f0c9368fde6bef85 *src/RcppExports.cpp
-f07862e4cc5545366ad95cf829879237 *src/Rwrapper.cpp
+20a3fa9b22500e886af3b615e73795bd *src/Rwrapper.cpp
 353cd9789f3b65cb350a64a2d450784c *src/cat_outlier.cpp
 60581e03bd69467d5ec13e66076f0b2d *src/clusters.cpp
-aeca765e3f86a8ab5922822504bc29aa *src/fit_model.cpp
+7cdf5ce484dc130951ab4948c761cd8d *src/fit_model.cpp
 d2d863f2743427121c5924bb9f70d217 *src/misc.cpp
 2f164850f14fd869f199159613b48255 *src/outlier_tree.h
 77d9d57e9cacb096c19fec48c63df299 *src/predict.cpp
