@@ -41,6 +41,9 @@
 #include <algorithm>
 #include <numeric>
 #include <unordered_set>
+#include <exception>
+#include <stdexcept>
+#include <cassert>
 #include <math.h>
 #include <cmath>
 #include <stddef.h>
@@ -94,6 +97,8 @@ typedef void (*sig_t_)(int);
 #ifndef _OPENMP
     #define omp_get_thread_num() 0
 #endif
+
+#define unexpected_error() throw std::runtime_error("Unexpected error. Please open an issue in GitHub.\n")
 
 
 /****************************************************************
