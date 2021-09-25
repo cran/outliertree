@@ -52,6 +52,7 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
+#include <stdint.h>
 #ifdef _OPENMP
     #include <omp.h>
 #endif
@@ -78,7 +79,7 @@ typedef void (*sig_t_)(int);
 #define is_na_or_inf(x) (isnan(x) || isinf(x))
 
 /* Aliasing for compiler optimizations */
-#if defined(__GNUG__) || defined(__GNUC__) || defined(_MSC_VER) || defined(__clang__) || defined(__INTEL_COMPILER)
+#if defined(__GNUG__) || defined(__GNUC__) || defined(_MSC_VER) || defined(__clang__) || defined(__INTEL_COMPILER) || defined(__IBMCPP__) || defined(__ibmxl__) || defined(SUPPORTS_RESTRICT)
     #define restrict __restrict
 #else
     #define restrict 
@@ -115,6 +116,8 @@ typedef enum SplitType {
 } SplitType;
 typedef enum ColTransf {NoTransf, Log, Exp} ColTransf; /* transformation to apply to numeric column */
 
+/* TODO: should write serializers for the model objects, but need to somehow deal with long double types */
+
 /*    
 *    1-d clusters that define homogeneous groups in which observations can be outliers.
 *    Note that these are associated to a tree and define one extra condition from what
@@ -126,7 +129,7 @@ typedef struct Cluster {
     size_t col_num = 0; /* numer of the column by which its being split, the target column is given by index of the cluster vector */
     SplitType split_type = Root;
     double split_point = HUGE_VAL; /* numerical */
-    std::vector<signed char> split_subset = std::vector<signed char>(); /* categorical */
+    std::vector<signed char> split_subset; /* categorical */
     int split_lev = INT_MAX;    /* ordinal */
     bool has_NA_branch = false; /* this is in order to determine the best outlier cluster when it fits under more than 1 */
 
@@ -139,7 +142,7 @@ typedef struct Cluster {
     double    display_lim_high = -HUGE_VAL;                /* numerical target column */
     double    display_mean = -HUGE_VAL;                    /* numerical target column */
     double    display_sd = -HUGE_VAL;                      /* numerical target column */
-    std::vector<signed char> subset_common = std::vector<signed char>(); /* categorical or ordinal target column (=0 is common) */
+    std::vector<signed char> subset_common; /* categorical or ordinal target column (=0 is common) */
     double    perc_in_subset = HUGE_VAL;                   /* categorical or ordinal target column */
     double    perc_next_most_comm = -HUGE_VAL;             /* categorical or ordinal target column */ /* TODO */
     int       categ_maj = -1;                              /* when using majority-criterion for categorical outliers */
@@ -257,21 +260,21 @@ typedef struct Cluster {
 typedef struct ClusterTree {
     size_t parent = 0;              /* index in a vector */
     SplitType parent_branch = Root; /* this tree follows this branch in the split given by its parent */
-    std::vector<size_t> clusters = std::vector<size_t>(); /* these clusters define additional splits */
+    std::vector<size_t> clusters; /* these clusters define additional splits */
 
     SplitType split_this_branch = Root;                        /* when using 'follow_all' */
-    std::vector<size_t> all_branches = std::vector<size_t>();  /* when using 'follow_all' */
+    std::vector<size_t> all_branches;  /* when using 'follow_all' */
 
     ColType   column_type = NoType;
     size_t    col_num = 0;
     double    split_point = HUGE_VAL;
-    std::vector<signed char> split_subset = std::vector<signed char>();
+    std::vector<signed char> split_subset;
     int split_lev = INT_MAX;
 
     size_t tree_NA = 0;    /* binary splits */
     size_t tree_left = 0;  /* binary splits */
     size_t tree_right = 0; /* binary splits */
-    std::vector<size_t> binary_branches = std::vector<size_t>(); /* multiple splits (single category or binarized categories) */
+    std::vector<size_t> binary_branches; /* multiple splits (single category or binarized categories) */
 
     ClusterTree(size_t parent, SplitType parent_branch)
     {
@@ -348,6 +351,8 @@ typedef struct ClusterTree {
 
 } ClusterTree;
 
+/* TODO: should separate the results from the actual model object */
+
 /* these are needed for prediction time, and are thus returned from the function that fits the model */
 typedef struct ModelOutputs {
     std::vector< std::vector<ClusterTree> > all_trees;  /* clusters in which observations can be outliers, required for prediction time */
@@ -382,11 +387,6 @@ typedef struct ModelOutputs {
         archive(
                 this->all_trees,
                 this->all_clusters,
-                this->outlier_scores_final,
-                this->outlier_clusters_final,
-                this->outlier_columns_final,
-                this->outlier_trees_final,
-                this->outlier_depth_final,
                 this->start_ix_cat_counts,
                 this->prop_categ,
                 this->col_transf,
@@ -489,8 +489,8 @@ typedef struct {
     std::vector<size_t>      buffer_crosstab;        /* buffer arrays where to allocate values required by functions and not used outside them */
     std::vector<size_t>      buffer_cat_cnt;         /* buffer arrays where to allocate values required by functions and not used outside them */
     std::vector<size_t>      buffer_cat_sorted;      /* buffer arrays where to allocate values required by functions and not used outside them */
-    std::vector<signed char>        buffer_subset_categ;    /* buffer arrays where to allocate values required by functions and not used outside them */
-    std::vector<signed char>        buffer_subset_outlier;  /* buffer arrays where to allocate values required by functions and not used outside them */
+    std::vector<signed char> buffer_subset_categ;    /* buffer arrays where to allocate values required by functions and not used outside them */
+    std::vector<signed char> buffer_subset_outlier;  /* buffer arrays where to allocate values required by functions and not used outside them */
     std::vector<long double> buffer_sd;              /* used for a more numerically-stable two-pass gain calculation */
     
     bool drop_cluster;          /* for categorical and ordinal variables, not all clusters can flag observations as outliers, so those are not kept */
@@ -788,3 +788,4 @@ void check_interrupt_switch(SignalSwitcher &ss);
 bool cy_check_interrupt_switch();
 void cy_tick_off_interrupt_switch();
 #endif
+size_t log2ceil(size_t v);
