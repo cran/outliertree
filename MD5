@@ -1,4 +1,4 @@
-a850fa608c69f061ef259d81ba91ac95 *DESCRIPTION
+8fe9b1d1e6bf6ab7e5560d6e95110a94 *DESCRIPTION
 f2f84a6270f5aef385a2a886f1246758 *NAMESPACE
 a3549c32ad34b6c7bd1a2024982a62ba *R/RcppExports.R
 a8b53087fcf6e29fdf5e8519ba1442fd *R/helpers.R
@@ -6,13 +6,13 @@ a8b53087fcf6e29fdf5e8519ba1442fd *R/helpers.R
 f5fb84a0c34408e213347e6d0e3b2fcf *R/obj_methods.R
 e37dfd4db46c0a06daa5c7bd9184c2cd *R/outliertree.R
 6d8cbbcb269a39e0848a529afd7151ff *build/vignette.rds
-aa66d0c0cb367d9d1122883b4c9f1325 *configure
-febecde5cab8fb35c5f71dbbae8c7451 *configure.ac
+2f347f521ddba7d62470a20fb2ad3e97 *configure
+72b7355aa8d363a0334c94f0c10cea5c *configure.ac
 d41d8cd98f00b204e9800998ecf8427e *configure.win
 68bd4e6455985c40493fc54c36e99ec0 *data/hypothyroid.rda
 c7d31c586d00d153e28c3ffc0e42e9ca *inst/doc/Introducing_OutlierTree.R
 520ac4aa8c838850aaf36d4e11426308 *inst/doc/Introducing_OutlierTree.Rmd
-07460ebab4f2b8ce9fbb90787709c15a *inst/doc/Introducing_OutlierTree.html
+f5ea7fa85d51fe9a361d0cbaeb276757 *inst/doc/Introducing_OutlierTree.html
 9e980d45ebf1314f6a7ab4d0735c34f9 *man/as.list.outlieroutputs.Rd
 c1db44adae56d90f7e038ce359f3a1d2 *man/check.outlierness.bounds.Rd
 289001788632a6cb1e1fa4faaa5f6502 *man/extract.training.outliers.Rd
