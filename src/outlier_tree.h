@@ -433,7 +433,69 @@ bool fit_outliers_models(ModelOutputs &model_outputs,
                          size_t max_depth = 3, double max_perc_outliers = 0.01, size_t min_size_numeric = 25, size_t min_size_categ = 50,
                          double min_gain = 1e-2, bool gain_as_pct = false, bool follow_all = false, double z_norm = 2.67, double z_outlier = 8.0);
 
-typedef struct {
+class ExhaustedColumnTracker
+{
+public:
+    std::vector<bool> is_exhausted;
+    std::vector<size_t> col_indices;
+    std::vector<size_t> n_held;
+
+    void initialize(size_t ncols, size_t max_depth)
+    {
+        this->is_exhausted.assign(ncols, false);
+        this->n_held.clear();
+        this->n_held.reserve(max_depth+1);
+        this->col_indices.clear();
+        this->col_indices.reserve(ncols);
+    }
+
+    void push_branch()
+    {
+        this->n_held.push_back(0);
+    }
+
+    void push_col(size_t col)
+    {
+        this->is_exhausted[col] = true;
+        this->col_indices.push_back(col);
+        this->n_held.back() += 1;
+    }
+
+    void pop_branch()
+    {
+        size_t col;
+        while (this->n_held.back() > 0)
+        {
+            col = this->col_indices.back();
+            this->is_exhausted[col] = false;
+            this->col_indices.pop_back();
+            this->n_held.back() -= 1;
+        }
+
+        this->n_held.pop_back();
+    }
+};
+
+class ExhaustedColumnsLevel
+{
+public:
+    bool pop = false;
+    ExhaustedColumnTracker* tracker = nullptr;
+    ExhaustedColumnsLevel() = default;
+    void initialize(ExhaustedColumnTracker* tracker) {
+        this->pop = true;
+        this->tracker = tracker;
+        this->tracker->push_branch();
+    }
+    ~ExhaustedColumnsLevel() {
+        if (this->pop) {
+            this->tracker->pop_branch();
+            this->pop = false;
+        }
+    }
+};
+
+struct Workspace {
     
     std::vector<size_t> ix_arr;           /* indices from the target column */
     size_t st;                            /* chunk of the indices to take for current function calls */
@@ -498,10 +560,14 @@ typedef struct {
     bool target_col_is_ord;     /* whether the target column is ordinal (rest is the same as in categoricals) */
     int  ncat_this;             /* number of categories in the target column */
 
-} Workspace;
+    ExhaustedColumnTracker exhausted_col_tracker;
+    bool has_zero_variance;
+    bool is_binary_split;
+    bool best_cat_split_is_binary;
+};
 
 /* info holders to shorten function call arguments */
-typedef struct {
+struct ModelParams {
     bool    categ_as_bin;
     bool    ord_as_bin;
     bool    cat_bruteforce_subset;
@@ -518,16 +584,16 @@ typedef struct {
     double  z_outlier;
     double  z_tail;
     std::vector<long double> prop_small; /* this is not a parameter, but a shared array determined from the parameters and data */
-} ModelParams;
+};
 
 /* Note: the vectors here are filled within the function that fits the model, while the pointers are passed from outside */
-typedef struct {
+struct InputData {
     double  *restrict numeric_data;     size_t ncols_numeric;
     int     *restrict categorical_data; size_t ncols_categ;   int *restrict ncat;
     int     *restrict ordinal_data;     size_t ncols_ord;     int *restrict ncat_ord;
     size_t  nrows; size_t tot_cols; std::vector<char> has_NA; std::vector<char> skip_col; int max_categ;
     std::vector<size_t> cat_counts;
-} InputData;
+};
 
 
 void process_numeric_col(std::vector<Cluster> &cluster_root,
@@ -559,12 +625,12 @@ void recursive_split_categ(Workspace &workspace,
     (This is the module from which
      new data can be flagged as outliers)
 ********************************************/
-typedef struct {
+struct PredictionData {
     double  *restrict numeric_data;
     int     *restrict categorical_data;
     int     *restrict ordinal_data;
     size_t nrows;
-} PredictionData;
+};
 
 bool find_new_outliers(double *restrict numeric_data,
                        int    *restrict categorical_data,
@@ -582,19 +648,21 @@ bool check_is_outlier_in_tree(std::vector<size_t> &clusters_in_tree, size_t curr
 *********************************/
 #define SD_REG 1e-5 /* Regularization for standard deviation estimation */
 
-typedef struct {
+/* TODO: should make long doubles optional */
+
+struct NumericBranch {
     size_t      cnt;
     long double sum;
     long double sum_sq;
-} NumericBranch;
+};
 
-typedef struct {
+struct NumericSplit {
     NumericBranch NA_branch    = {0, 0, 0};
     NumericBranch left_branch  = {0, 0, 0};
     NumericBranch right_branch = {0, 0, 0};
-} NumericSplit;
+};
 
-typedef struct {
+struct CategSplit {
     size_t *restrict NA_branch;     /* array of counts of the target variable's categories */
     size_t *restrict left_branch;   /* array of counts of the target variable's categories */
     size_t *restrict right_branch;  /* array of counts of the target variable's categories */
@@ -603,7 +671,7 @@ typedef struct {
     size_t size_NA    = 0;
     size_t size_left  = 0;
     size_t size_right = 0;
-} CategSplit;
+};
 
 void subset_to_onehot(size_t ix_arr[], size_t n_true, size_t n_tot, signed char onehot[]);
 size_t move_zero_count_to_front(size_t *restrict cat_sorted, size_t *restrict cat_cnt, size_t ncat_x);
@@ -622,23 +690,25 @@ long double categ_gain_from_split(size_t *restrict ix_arr, int *restrict x, size
                                   size_t ncat, size_t *restrict buffer_cat_cnt, long double base_info);
 void split_numericx_numericy(size_t *restrict ix_arr, size_t st, size_t end, double *restrict x, double *restrict y,
                              long double sd_y, bool has_na, size_t min_size, bool take_mid, long double *restrict buffer_sd,
-                             long double *restrict gain, double *restrict split_point, size_t *restrict split_left, size_t *restrict split_NA);
+                             long double *restrict gain, double *restrict split_point, size_t *restrict split_left, size_t *restrict split_NA, bool *restrict has_zero_variance);
 void split_categx_numericy(size_t *restrict ix_arr, size_t st, size_t end, int *restrict x, double *restrict y, long double sd_y, double ymean,
                            bool x_is_ordinal, size_t ncat_x, size_t *restrict buffer_cat_cnt, long double *restrict buffer_cat_sum,
                            long double *restrict buffer_cat_sum_sq, size_t *restrict buffer_cat_sorted,
-                           bool has_na, size_t min_size, long double *gain, signed char *restrict split_subset, int *restrict split_point);
+                           bool has_na, size_t min_size, long double *gain, signed char *restrict split_subset, int *restrict split_point, bool *restrict has_zero_variance, bool *restrict binary_split);
 void split_numericx_categy(size_t *restrict ix_arr, size_t st, size_t end, double *restrict x, int *restrict y,
                            size_t ncat_y, long double base_info, size_t *restrict buffer_cat_cnt,
                            bool has_na, size_t min_size, bool take_mid, long double *restrict gain, double *restrict split_point,
-                           size_t *restrict split_left, size_t *restrict split_NA);
+                           size_t *restrict split_left, size_t *restrict split_NA, bool *restrict has_zero_variance);
 void split_ordx_categy(size_t *restrict ix_arr, size_t st, size_t end, int *restrict x, int *restrict y,
                        size_t ncat_y, size_t ncat_x, long double base_info,
                        size_t *restrict buffer_cat_cnt, size_t *restrict buffer_crosstab, size_t *restrict buffer_ord_cnt,
-                       bool has_na, size_t min_size, long double *gain, int *split_point);
+                       bool has_na, size_t min_size, long double *gain, int *split_point,
+                       bool *restrict has_zero_variance, bool *restrict binary_split);
 void split_categx_biny(size_t *restrict ix_arr, size_t st, size_t end, int *restrict x, int *restrict y,
                        size_t ncat_x, long double base_info,
                        size_t *restrict buffer_cat_cnt, size_t *restrict buffer_crosstab, size_t *restrict buffer_cat_sorted,
-                       bool has_na, size_t min_size, long double *gain, signed char *restrict split_subset);
+                       bool has_na, size_t min_size, long double *gain, signed char *restrict split_subset,
+                       bool *restrict has_zero_variance, bool *restrict binary_split);
 void split_categx_categy_separate(size_t *restrict ix_arr, size_t st, size_t end, int *restrict x, int *restrict y,
                                   size_t ncat_x, size_t ncat_y, long double base_info,
                                   size_t *restrict buffer_cat_cnt, size_t *restrict buffer_crosstab,
@@ -646,7 +716,8 @@ void split_categx_categy_separate(size_t *restrict ix_arr, size_t st, size_t end
 void split_categx_categy_subset(size_t *restrict ix_arr, size_t st, size_t end, int *restrict x, int *restrict y,
                                 size_t ncat_x, size_t ncat_y, long double base_info,
                                 size_t *restrict buffer_cat_cnt, size_t *restrict buffer_crosstab, size_t *restrict buffer_split,
-                                bool has_na, size_t min_size, long double *gain, signed char *restrict split_subset);
+                                bool has_na, size_t min_size, long double *gain, signed char *restrict split_subset,
+                                bool *restrict has_zero_variance, bool *restrict binary_split);
 
 
 
@@ -727,20 +798,21 @@ typedef struct {
     double sd_y_restore;
     bool has_outliers_restore;
     bool lev_has_outliers_restore;
+    bool is_binary_split_restore;
 } RecursionState;
 
 
-int calculate_category_indices(size_t start_ix_cat_counts[], int ncat[], size_t ncols, bool skip_col[], int max_categ = 0);
+int calculate_category_indices(size_t start_ix_cat_counts[], int ncat[], size_t ncols, char skip_col[], int max_categ = 0);
 void calculate_all_cat_counts(size_t start_ix_cat_counts[], size_t cat_counts[], int ncat[],
                               int categorical_data[], size_t ncols, size_t nrows,
-                              bool has_NA[], bool skip_col[], int nthreads);
+                              char has_NA[], char skip_col[], int nthreads);
 void check_cat_col_unsplittable(size_t start_ix_cat_counts[], size_t cat_counts[], int ncat[],
-                                size_t ncols, size_t min_conditioned_size, size_t nrows, bool skip_col[], int nthreads);
+                                size_t ncols, size_t min_conditioned_size, size_t nrows, char skip_col[], int nthreads);
 void calculate_lowerlim_proportion(long double *restrict prop_small, long double *restrict prop,
                                    size_t start_ix_cat_counts[], size_t cat_counts[],
                                    size_t ncols, size_t nrows, double z_norm, double z_tail);
-void check_missing_no_variance(double numeric_data[], size_t ncols, size_t nrows, bool has_NA[],
-                               bool skip_col[], int min_decimals[], int nthreads);
+void check_missing_no_variance(double numeric_data[], size_t ncols, size_t nrows, char has_NA[],
+                               char skip_col[], int min_decimals[], int nthreads);
 void calc_central_mean_and_sd(size_t ix_arr[], size_t st, size_t end, double x[], size_t size_quarter, double *mean_central, double *sd_central);
 void check_for_tails(size_t ix_arr[], size_t st, size_t end, double *restrict x,
                      double z_norm, double max_perc_outliers,
@@ -789,3 +861,6 @@ bool cy_check_interrupt_switch();
 void cy_tick_off_interrupt_switch();
 #endif
 size_t log2ceil(size_t v);
+#ifdef _FOR_PYTHON
+ModelOutputs deepcopy(const ModelOutputs &inp);
+#endif
