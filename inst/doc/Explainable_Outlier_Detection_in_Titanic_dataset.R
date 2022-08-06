@@ -5,43 +5,51 @@ is_check <- ("CheckExEnv" %in% search()) || any(c("_R_CHECK_TIMINGS_",
              "_R_CHECK_LICENSE_") %in% names(Sys.getenv()))
 
 ## ----message=FALSE------------------------------------------------------------
-library(magrittr)
-library(dplyr)
+library(data.table)
 library(kableExtra)
 library(outliertree)
 data("titanic")
 
-titanic %>%
-	head(5) %>%
-	kable() %>%
-	kable_styling()
+titanic |>
+    head(5) |>
+    kable() |>
+    kable_styling()
 
 ## -----------------------------------------------------------------------------
 ## Capitalize column names and some values for easier reading
 capitalize <- function(x) gsub("^(\\w)", "\\U\\1\\E", x, perl=TRUE)
-titanic %<>%
-	rename_all(capitalize) %>%
-	mutate(Sex = capitalize(Sex)) %>%
-	rename(SibSp = Sibsp)
+
+titanic <- as.data.table(titanic)
+titanic[
+    , setnames(.SD, names(.SD), capitalize(names(.SD)))
+][
+    , setnames(.SD, "Sibsp", "SibSp")
+][
+    , Sex := capitalize(Sex)
+] -> titanic
 
 ## Convert 'survived' to yes/no for easier reading
-titanic %<>%
-	mutate(Survived = recode(Survived, `1`="Yes", `0`="No"))
+titanic[
+    , Survived := ifelse(Survived, "Yes", "No")
+]
 
 ## Some columns are not useful, such as name (an ID), ticket number (another ID),
 ## or destination (too many values, many non-repeated)
-titanic %<>%
-	select(-Name, -Ticket, -Home.dest)
+titanic[
+    , !c("Name", "Ticket", "Home.dest")
+] -> titanic
 
 ## Ordinal columns need to be passed as ordered factors
 cols_ord <- c("Pclass", "Parch", "SibSp")
-titanic %<>%
-	mutate_at(.vars=cols_ord, function(.) factor(., ordered = TRUE))
+titanic[
+    , (cols_ord) := lapply(.SD, function(x) factor(x, ordered = TRUE))
+    , .SDcols = cols_ord
+]
 
 ## A look at the processed data
-titanic %>%
-	head(5) %>%
-	kable() %>%
+titanic |>
+	head(5) |>
+	kable() |>
 	kable_styling()
 
 ## ---- eval=FALSE--------------------------------------------------------------
@@ -64,11 +72,13 @@ titanic[c(1147, 1164), ]
 
 ## -----------------------------------------------------------------------------
 ## Distribution of the group from which those two outliers were flagged
-titanic %>%
-	filter(Pclass == 3,
-		   SibSp == 0,
-		   Embarked == "Q") %$%
-	Fare %>%
+titanic[
+    Pclass == 3 &
+    SibSp == 0 &
+    Embarked == "Q"
+][
+    , Fare
+] |>
 	hist(breaks = 100, col = "navy", xlab="Fare",
 		 main="Distribution of Fare within cluster")
 
