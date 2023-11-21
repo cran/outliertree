@@ -178,7 +178,7 @@ outliers[700:1000]
 ### use custom row names
 df.w.names <- hypothyroid
 row.names(df.w.names) <- paste0("rownum", 1:nrow(hypothyroid))
-outliers.w.names <- predict(model, df.w.names, return_outliers=TRUE)
+outliers.w.names <- predict(model, df.w.names, return_outliers=TRUE, nthreads=1)
 outliers.w.names[["rownum745"]]
 }
 \references{
@@ -188,5 +188,5 @@ outliers.w.names[["rownum745"]]
 }
 }
 \seealso{
-\link{predict.outliertree} \link{extract.training.outliers} \link{hypothyroid} \link{unpack.outlier.tree}
+\link{predict.outliertree} \link{extract.training.outliers} \link{hypothyroid}
 }
