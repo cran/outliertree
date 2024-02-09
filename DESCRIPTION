@@ -1,7 +1,7 @@
 Package: outliertree
 Type: Package
 Title: Explainable Outlier Detection Through Decision Tree Conditioning
-Version: 1.8.2
+Version: 1.9.0
 Author: David Cortes
 Maintainer: David Cortes <david.cortes.rivera@gmail.com>
 URL: https://github.com/david-cortes/outliertree
@@ -18,8 +18,8 @@ Suggests: knitr, rmarkdown, kableExtra, data.table
 LinkingTo: Rcpp, Rcereal
 LazyData: true
 VignetteBuilder: knitr
-RoxygenNote: 7.2.3
+RoxygenNote: 7.3.1
 NeedsCompilation: yes
-Packaged: 2023-11-21 21:14:45 UTC; david
+Packaged: 2024-02-09 20:49:40 UTC; david
 Repository: CRAN
-Date/Publication: 2023-11-21 21:50:03 UTC
+Date/Publication: 2024-02-09 21:40:02 UTC
