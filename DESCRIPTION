@@ -1,7 +1,7 @@
 Package: outliertree
 Type: Package
 Title: Explainable Outlier Detection Through Decision Tree Conditioning
-Version: 1.10.0
+Version: 1.10.0-1
 Authors@R: person(given = "David",
                   family = "Cortes",
                   role = c("aut", "cre"),
@@ -23,7 +23,7 @@ LazyData: true
 VignetteBuilder: knitr
 RoxygenNote: 7.3.1
 NeedsCompilation: yes
-Packaged: 2024-09-05 19:09:03 UTC; david
+Packaged: 2026-03-04 17:20:09 UTC; david
 Author: David Cortes [aut, cre]
 Repository: CRAN
-Date/Publication: 2024-09-06 14:40:06 UTC
+Date/Publication: 2026-03-05 09:00:02 UTC
